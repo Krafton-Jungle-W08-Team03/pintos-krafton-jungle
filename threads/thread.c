@@ -28,6 +28,8 @@
    that are ready to run but not actually running. */
 static struct list ready_list;
 
+static struct list sleep_list; // sleep_list 추가
+
 /* Idle thread. */
 static struct thread *idle_thread;
 
@@ -39,6 +41,9 @@ static struct lock tid_lock;
 
 /* Thread destruction requests */
 static struct list destruction_req;
+
+/* Define global ticks */
+static int64_t global_ticks = INT64_MAX; // 초기 global_ticks 비교를 위해서 최대값을 설정해준다.
 
 /* Statistics. */
 static long long idle_ticks;    /* # of timer ticks spent idle. */
@@ -62,6 +67,12 @@ static void init_thread (struct thread *, const char *name, int priority);
 static void do_schedule(int status);
 static void schedule (void);
 static tid_t allocate_tid (void);
+
+// 구현 함수
+int64_t get_global_ticks(void);
+void set_global_ticks(int64_t ticks);
+void thread_awake(int64_t ticks);
+void thread_sleep(int64_t ticks);
 
 /* Returns true if T appears to point to a valid thread. */
 #define is_thread(t) ((t) != NULL && (t)->magic == THREAD_MAGIC)
@@ -94,6 +105,7 @@ static uint64_t gdt[3] = { 0, 0x00af9a000000ffff, 0x00cf92000000ffff };
    finishes. */
 void
 thread_init (void) {
+	printf("thread init\n");
 	ASSERT (intr_get_level () == INTR_OFF);
 
 	/* Reload the temporal gdt for the kernel
@@ -108,6 +120,7 @@ thread_init (void) {
 	/* Init the globla thread context */
 	lock_init (&tid_lock);
 	list_init (&ready_list);
+	list_init (&sleep_list); // 슬립 리스트 초기화
 	list_init (&destruction_req);
 
 	/* Set up a thread structure for the running thread. */
@@ -210,6 +223,7 @@ thread_create (const char *name, int priority,
 	return tid;
 }
 
+// 현재 스레드를 슬립 상태로 만든다.
 /* Puts the current thread to sleep.  It will not be scheduled
    again until awoken by thread_unblock().
 
@@ -296,16 +310,73 @@ thread_exit (void) {
    may be scheduled again immediately at the scheduler's whim. */
 void
 thread_yield (void) {
-	struct thread *curr = thread_current ();
+	struct thread *curr = thread_current (); // 현재 스레드의 포인터
 	enum intr_level old_level;
 
 	ASSERT (!intr_context ());
 
-	old_level = intr_disable ();
-	if (curr != idle_thread)
-		list_push_back (&ready_list, &curr->elem);
-	do_schedule (THREAD_READY);
-	intr_set_level (old_level);
+	old_level = intr_disable (); // 인터럽터를 비활성화한다.
+	if (curr != idle_thread) // 현재 스레드가 유휴 스레드가 아니면 리스트의 맨 뒤로 넣는다.
+		list_push_back (&ready_list, &curr->elem); // 현재 스레드를 레디리스트의 맨 뒤로 삽입한다.
+	do_schedule (THREAD_READY); // ready 상태로 전환하고 컨텍스트 스위칭을 한다.
+	intr_set_level (old_level); // 이후 다시 이전 상태로 되돌린다.
+}
+
+// 스레드를 슬립시킨다. -> blocked 상태로 만들고 슬립 리스트에 삽입
+void
+thread_sleep(int64_t ticks){ // ticks : 해당 스레드가 깨어나야 할 시간 (eg. 12:05)
+	struct thread *curr = thread_current (); // 현재 스레드의 포인터
+	enum intr_level old_level; // 이전 상태
+
+	ASSERT (!intr_context ());
+
+	old_level = intr_disable (); // 인터럽터를 비활성화한다.
+	if (curr != idle_thread) // 현재 스레드가 유휴 스레드가 아니면 슬립 리스트의 맨 뒤로 넣는다.
+	{
+		curr -> wakeup_tick = ticks; // 깨워야할 시간으로 새로 받은 인자를 넣는다.
+		list_push_back (&sleep_list, &curr->elem); // 현재 스레드를 레디리스트의 맨 뒤로 삽입한다.
+		// curr -> status = THREAD_BLOCKED; 
+
+		set_global_ticks(ticks);
+	}
+	
+	thread_block(); // context switching : 스레드의 상태를 BLOCKED로 만들고 -> schedule
+	
+	// TEST 통과하면 시도해보기
+	// do_schedule (THREAD_BLOCKED); // BLOCKED 상태로 전환하고 컨텍스트 스위칭을 한다.
+	intr_set_level (old_level); // 이후 다시 인터럽터를 활성화한다.
+}
+
+// 글로벌 틱 get
+// 한양대. get_next_tick_to_awake
+int64_t get_global_ticks(){
+	return global_ticks;
+}
+
+// 로컬 틱이 글로벌 틱 보다 작을 때, 글로벌 틱 갱신
+// 한양대, update_next_tick_to_awake
+void set_global_ticks(int64_t ticks){
+	if (ticks < global_ticks) {
+		global_ticks = ticks;
+	}
+}
+
+// 타임 인터럽트가 발생한 시각(ticks (eg. 12시)) 보다 깨워야할 시각이 작은 스레드를 깨운다  
+void thread_awake(int64_t ticks){
+	struct list_elem *curr = list_begin(&sleep_list);
+	set_global_ticks(INT64_MAX); // 기존 글로벌 틱으로 비교하면 초기화되지 않음 
+	struct thread *curr_thread;
+	while (curr != list_end(&sleep_list)){ // 전체 순회
+		curr_thread = list_entry(curr, struct thread, elem);
+		if (curr_thread -> wakeup_tick <= ticks) { 
+			curr = list_remove(curr); // curr을 슬립 리스트에서 뻄;
+			thread_unblock(curr_thread); // curr을 레디 상태로 만듦(unblocked)
+		} else {
+			set_global_ticks(curr_thread -> wakeup_tick);
+			// 슬립 리스트에서 현재 깨어나야하는 시간이 ticks 보다 클때, 디음 루틴을 위해 글로벌 틱을 재설정한다.
+			curr = curr -> next;
+		}
+	}
 }
 
 /* Sets the current thread's priority to NEW_PRIORITY. */
@@ -411,6 +482,7 @@ init_thread (struct thread *t, const char *name, int priority) {
 	t->magic = THREAD_MAGIC;
 }
 
+// 준비 리스트에서 맨 앞의 스레드를 뽑아와, 컨텍스트 스위치 수행
 /* Chooses and returns the next thread to be scheduled.  Should
    return a thread from the run queue, unless the run queue is
    empty.  (If the running thread can continue running, then it
@@ -418,8 +490,9 @@ init_thread (struct thread *t, const char *name, int priority) {
    idle_thread. */
 static struct thread *
 next_thread_to_run (void) {
-	if (list_empty (&ready_list))
+	if (list_empty (&ready_list)){
 		return idle_thread;
+	}
 	else
 		return list_entry (list_pop_front (&ready_list), struct thread, elem);
 }
@@ -521,7 +594,8 @@ thread_launch (struct thread *th) {
 			);
 }
 
-/* Schedules a new process. At entry, interrupts must be off.
+/* Schedules a new process. 
+ * At entry, interrupts must be off.
  * This function modify current thread's status to status and then
  * finds another thread to run and switches to it.
  * It's not safe to call printf() in the schedule(). */
@@ -529,7 +603,7 @@ static void
 do_schedule(int status) {
 	ASSERT (intr_get_level () == INTR_OFF);
 	ASSERT (thread_current()->status == THREAD_RUNNING);
-	while (!list_empty (&destruction_req)) {
+	while (!list_empty (&destruction_req)) { // 좀비 스레드 제거
 		struct thread *victim =
 			list_entry (list_pop_front (&destruction_req), struct thread, elem);
 		palloc_free_page(victim);
@@ -538,14 +612,14 @@ do_schedule(int status) {
 	schedule ();
 }
 
-static void
-schedule (void) {
+// 컨텍스트 스위칭
+static void schedule (void) {
 	struct thread *curr = running_thread ();
 	struct thread *next = next_thread_to_run ();
 
 	ASSERT (intr_get_level () == INTR_OFF);
 	ASSERT (curr->status != THREAD_RUNNING);
-	ASSERT (is_thread (next));
+	ASSERT (is_thread (next)); // 다음 스레드로 컨텍스트 스위칭
 	/* Mark us as running. */
 	next->status = THREAD_RUNNING;
 

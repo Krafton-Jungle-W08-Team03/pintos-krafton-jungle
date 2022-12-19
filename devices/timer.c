@@ -18,7 +18,7 @@
 #endif
 
 /* Number of timer ticks since OS booted. */
-static int64_t ticks;
+static int64_t ticks; // 현재 시각(eg. 12시)
 
 /* Number of loops per timer tick.
    Initialized by timer_calibrate(). */
@@ -88,13 +88,16 @@ timer_elapsed (int64_t then) {
 }
 
 /* Suspends execution for approximately TICKS timer ticks. */
+// ticks 시간이 흐를 때 까지 스레드 호출을 중단한다.
 void
-timer_sleep (int64_t ticks) {
-	int64_t start = timer_ticks ();
+timer_sleep (int64_t ticks) { // ticks 시간 만큼 뒤에 일어나라(상대 시간 (eg. 5분))
+	int64_t start = timer_ticks (); // 현재 시간(프로그램 스타트 이후 시간 (eg. 12시))
 
 	ASSERT (intr_get_level () == INTR_ON);
-	while (timer_elapsed (start) < ticks)
-		thread_yield ();
+	// while (timer_elapsed (start) < ticks) // 시작 시간으로 부터 흐른 시간
+	// 	thread_yield (); // 스레드 양보를 계속 수행하여 cpu를 릴리즈한다.
+	if (timer_elapsed (start) < ticks) // 현재 시간부터 경과 시간 -> 아직 globaltics ticks 까지 도달 못함
+		thread_sleep(start + ticks); // 스레드를 슬립시킨다.
 }
 
 /* Suspends execution for approximately MS milliseconds. */
@@ -125,7 +128,11 @@ timer_print_stats (void) {
 static void
 timer_interrupt (struct intr_frame *args UNUSED) {
 	ticks++;
-	thread_tick ();
+	thread_tick (); // update the cpu usage for running process
+
+	if (get_global_ticks() <= ticks){ // 현재 시각이 글로벌 틱보다 크면 스레드 깨우기
+		thread_awake(ticks);
+	}
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer
