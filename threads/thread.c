@@ -73,6 +73,8 @@ int64_t get_global_ticks(void);
 void set_global_ticks(int64_t ticks);
 void thread_awake(int64_t ticks);
 void thread_sleep(int64_t ticks);
+void test_max_priority (void);
+bool cmp_priority (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
 
 /* Returns true if T appears to point to a valid thread. */
 #define is_thread(t) ((t) != NULL && (t)->magic == THREAD_MAGIC)
@@ -220,6 +222,9 @@ thread_create (const char *name, int priority,
 	/* Add to run queue. */
 	thread_unblock (t);
 
+	//1. 현재 실행중인 스레드와 새로 추가하려는 스레드 비교
+	//2. 만약 새로 추가하려는 스레드가 현재 실행중인 스레드보다 우선순위가 높으면 CPU를 선점한다.
+
 	return tid;
 }
 
@@ -255,7 +260,10 @@ thread_unblock (struct thread *t) {
 
 	old_level = intr_disable ();
 	ASSERT (t->status == THREAD_BLOCKED);
+	/* origin code
 	list_push_back (&ready_list, &t->elem);
+	*/
+	list_insert_ordered(&ready_list, &t -> elem, cmp_priority, NULL); // 정렬된 상태로 스레드가 삽입되도록 한다.
 	t->status = THREAD_READY;
 	intr_set_level (old_level);
 }
@@ -317,8 +325,12 @@ thread_yield (void) {
 	ASSERT (!intr_context ());
 
 	old_level = intr_disable (); // 인터럽터를 비활성화한다.
-	if (curr != idle_thread) // 현재 스레드가 유휴 스레드가 아니면 리스트의 맨 뒤로 넣는다.
+	if (curr != idle_thread) { // 현재 스레드가 유휴 스레드가 아니면 리스트의 맨 뒤로 넣는다.
+		/* origin code
 		list_push_back (&ready_list, &curr->elem); // 현재 스레드를 레디리스트의 맨 뒤로 삽입한다.
+		*/
+		list_insert_ordered(&ready_list, &curr -> elem, cmp_priority, NULL); // 정렬된 상태로 스레드가 삽입되도록 한다.
+	}
 	do_schedule (THREAD_READY); // ready 상태로 전환하고 컨텍스트 스위칭을 한다.
 	intr_set_level (old_level); // 이후 다시 이전 상태로 되돌린다.
 }
@@ -386,13 +398,30 @@ thread_awake(int64_t ticks){
 /* Sets the current thread's priority to NEW_PRIORITY. */
 void
 thread_set_priority (int new_priority) {
-	thread_current ()->priority = new_priority;
+	thread_current ()->priority = new_priority; // 현재 스레드의 우선 순위를 갱신한다.
+	
 }
 
 /* Returns the current thread's priority. */
+// 현재 실행중인 스레드의 우선 순위 리턴
 int
 thread_get_priority (void) {
 	return thread_current ()->priority;
+}
+
+/* 현재 수행중인 스레드와 가장 높은 순위의 스레드의 우선순위를 비교한다. */
+void
+test_max_priority(void) {
+	// if (thread_get_priority < )
+}
+
+/* 인자로 주어진 스레드들의 우선 순위를 비교한다. */
+// a의 우선 순위가 더 크거나 같으면 1, b가 더 크면 0 리턴
+bool
+cmp_priority (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) {
+	return list_entry(a, struct thread, elem) -> priority \
+		<= list_entry(b, struct thread, elem) -> priority ? \
+		1 : 0; 
 }
 
 /* Sets the current thread's nice value to NICE. */
