@@ -120,7 +120,7 @@ thread_init (void) {
 	/* Init the globla thread context */
 	lock_init (&tid_lock);
 	list_init (&ready_list);
-	list_init (&sleep_list); // 슬립 리스트 초기화
+	list_init (&sleep_list); // sleep_list를 초기화 한다.
 	list_init (&destruction_req);
 
 	/* Set up a thread structure for the running thread. */
@@ -223,7 +223,7 @@ thread_create (const char *name, int priority,
 	return tid;
 }
 
-// 현재 스레드를 슬립 상태로 만든다.
+// 현재 스레드를 BLOCKED 상태로 만들고 running 스레드를 새롭게 업데이트한다.(컨텍스트 스위치)
 /* Puts the current thread to sleep.  It will not be scheduled
    again until awoken by thread_unblock().
 
@@ -238,6 +238,7 @@ thread_block (void) {
 	schedule ();
 }
 
+// BLOCKED 상태의 스레드를 READY 상태로 전환하고 ready_list에 삽입한다.
 /* Transitions a blocked thread T to the ready-to-run state.
    This is an error if T is not blocked.  (Use thread_yield() to
    make the running thread ready.)
@@ -322,16 +323,17 @@ thread_yield (void) {
 	intr_set_level (old_level); // 이후 다시 이전 상태로 되돌린다.
 }
 
-// 스레드를 슬립시킨다. -> blocked 상태로 만들고 슬립 리스트에 삽입
+// 해당 스레드를 sleep시킨다.
+// ↳ 스레드 상태를 blocked로 만들고 sleep_list에 삽입, 새 스레드를 running상태로 만든다.(컨텍스트 스위치)
 void
-thread_sleep(int64_t ticks){ // ticks : 해당 스레드가 깨어나야 할 시간 (eg. 12:05)
+thread_sleep(int64_t ticks){ // ticks : 해당 스레드가 깨어나야 할 절대적인 시간 (eg. 12:05)
 	struct thread *curr = thread_current (); // 현재 스레드의 포인터
 	enum intr_level old_level; // 이전 상태
 
 	ASSERT (!intr_context ());
 
-	old_level = intr_disable (); // 인터럽터를 비활성화한다.
-	if (curr != idle_thread) // 현재 스레드가 유휴 스레드가 아니면 슬립 리스트의 맨 뒤로 넣는다.
+	old_level = intr_disable (); // 인터럽터를 비활성화 시킨다.
+	if (curr != idle_thread) // 현재 스레드가 유휴 스레드가 아니면 sleep_list의 맨 뒤로 넣는다.
 	{
 		curr -> wakeup_tick = ticks; // 깨워야할 시간으로 새로 받은 인자를 넣는다.
 		list_push_back (&sleep_list, &curr->elem); // 현재 스레드를 레디리스트의 맨 뒤로 삽입한다.
@@ -340,36 +342,38 @@ thread_sleep(int64_t ticks){ // ticks : 해당 스레드가 깨어나야 할 시
 		set_global_ticks(ticks);
 	}
 	
-	thread_block(); // context switching : 스레드의 상태를 BLOCKED로 만들고 -> schedule
-	
-	// TEST 통과하면 시도해보기
-	// do_schedule (THREAD_BLOCKED); // BLOCKED 상태로 전환하고 컨텍스트 스위칭을 한다.
+	/* 스레드의 상태를 BLOCKED로 전환하고 컨텍스트 스위치(schedule())를 수행한다. */
+	thread_block();
+	// do_schedule (THREAD_BLOCKED); (= thread_block)
 	intr_set_level (old_level); // 이후 다시 인터럽터를 활성화한다.
 }
 
-// 글로벌 틱 get
-// 한양대. get_next_tick_to_awake
-int64_t get_global_ticks(){
+// global ticks를 가져온다.
+// Hanyang Univ's func : get_next_tick_to_awake
+int64_t 
+get_global_ticks(){
 	return global_ticks;
 }
 
-// 로컬 틱이 글로벌 틱 보다 작을 때, 글로벌 틱 갱신
-// 한양대, update_next_tick_to_awake
-void set_global_ticks(int64_t ticks){
+// local ticks(각 스레드 wakeup_tick)가 global ticks보다 작을 때, global ticks을 갱신한다.
+// Hanyang Univ's func : update_next_tick_to_awake
+void 
+set_global_ticks(int64_t ticks){
 	if (ticks < global_ticks) {
 		global_ticks = ticks;
 	}
 }
 
-// 타임 인터럽트가 발생한 시각(ticks (eg. 12시)) 보다 깨워야할 시각이 작은 스레드를 깨운다  
-void thread_awake(int64_t ticks){
+// time_interrupt가 발생한 시각(ticks (eg. 12시))보다 깨워야할 시각이 작은 스레드를 깨운다.
+void 
+thread_awake(int64_t ticks){
 	struct list_elem *curr = list_begin(&sleep_list);
 	set_global_ticks(INT64_MAX); // 기존 글로벌 틱으로 비교하면 초기화되지 않음 
 	struct thread *curr_thread;
 	while (curr != list_end(&sleep_list)){ // 전체 순회
 		curr_thread = list_entry(curr, struct thread, elem);
 		if (curr_thread -> wakeup_tick <= ticks) { 
-			curr = list_remove(curr); // curr을 슬립 리스트에서 뻄;
+			curr = list_remove(curr); // curr을 슬립 리스트에서 뻄
 			thread_unblock(curr_thread); // curr을 레디 상태로 만듦(unblocked)
 		} else {
 			set_global_ticks(curr_thread -> wakeup_tick);
@@ -612,7 +616,7 @@ do_schedule(int status) {
 	schedule ();
 }
 
-// 컨텍스트 스위칭
+// running 스레드를 새롭게 업데이트 한다.(컨텍스트 스위치 과정의 일환)
 static void schedule (void) {
 	struct thread *curr = running_thread ();
 	struct thread *next = next_thread_to_run ();

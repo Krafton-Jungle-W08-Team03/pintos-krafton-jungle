@@ -91,7 +91,7 @@ struct thread {
 	enum thread_status status;          /* Thread state. */
 	char name[16];                      /* Name (for debugging purposes). */
 	int priority;                       /* Priority. */
-	int64_t wakeup_tick; // 깨워야하는 틱 시간 필드 추가(local ticks)
+	int64_t wakeup_tick; // 해당 스레드를 깨워야하는 시간(local ticks)
 
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem;              /* List element. */
