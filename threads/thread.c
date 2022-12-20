@@ -73,7 +73,6 @@ int64_t get_global_ticks(void);
 void set_global_ticks(int64_t ticks);
 void thread_awake(int64_t ticks);
 void thread_sleep(int64_t ticks);
-void test_max_priority (void);
 bool cmp_priority (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
 
 /* Returns true if T appears to point to a valid thread. */
@@ -220,11 +219,12 @@ thread_create (const char *name, int priority,
 	t->tf.eflags = FLAG_IF;
 
 	/* Add to run queue. */
-	thread_unblock (t);
+	thread_unblock (t); // ready_list 에 새로 넣은 스레드 
 
-	//1. 현재 실행중인 스레드와 새로 추가하려는 스레드 비교
-	//2. 만약 새로 추가하려는 스레드가 현재 실행중인 스레드보다 우선순위가 높으면 CPU를 선점한다.
-
+	if (thread_get_priority() < priority) { //1. 현재 실행중인 스레드와 새로 추가하려는 스레드 비교
+		thread_yield(); //2. 만약 새로 추가하려는 스레드가 현재 실행중인 스레드보다 우선순위가 높으면 CPU를 선점한다.
+	}
+	
 	return tid;
 }
 
@@ -396,10 +396,14 @@ thread_awake(int64_t ticks){
 }
 
 /* Sets the current thread's priority to NEW_PRIORITY. */
+// 현재 스레드의 우선 순위를 변경한다.
 void
 thread_set_priority (int new_priority) {
-	thread_current ()->priority = new_priority; // 현재 스레드의 우선 순위를 갱신한다.
-	
+	thread_current ()->priority = new_priority; // 현재 스레드의 우선순위를 new_priority(매개변수)로 바꿈
+
+	if (thread_get_priority() <  list_entry(list_begin(&ready_list), struct thread, elem) -> priority){
+		thread_yield();
+	}
 }
 
 /* Returns the current thread's priority. */
@@ -409,18 +413,12 @@ thread_get_priority (void) {
 	return thread_current ()->priority;
 }
 
-/* 현재 수행중인 스레드와 가장 높은 순위의 스레드의 우선순위를 비교한다. */
-void
-test_max_priority(void) {
-	// if (thread_get_priority < )
-}
-
 /* 인자로 주어진 스레드들의 우선 순위를 비교한다. */
-// a의 우선 순위가 더 크거나 같으면 1, b가 더 크면 0 리턴
+// a의 우선 순위가 더 크면 1, b가 같거나 더 크면 0 리턴
 bool
 cmp_priority (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) {
 	return list_entry(a, struct thread, elem) -> priority \
-		<= list_entry(b, struct thread, elem) -> priority ? \
+		> list_entry(b, struct thread, elem) -> priority ? \
 		1 : 0; 
 }
 
