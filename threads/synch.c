@@ -307,8 +307,6 @@ refresh_priority(void){
 		donations_priority = list_entry(donation_elem, struct thread, d_elem)->priority;
 		if (thread_get_priority() < donations_priority)
 			thread_current()->priority = donations_priority;
-			// donation_elem = donation_elem->next;
-		// }
 	}
 }
 
