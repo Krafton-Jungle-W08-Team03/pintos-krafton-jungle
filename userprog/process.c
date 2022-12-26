@@ -27,6 +27,10 @@ static bool load (const char *file_name, struct intr_frame *if_);
 static void initd (void *f_name);
 static void __do_fork (void *);
 
+// 구현 함수
+static void argument_parse(char *file_name, int *argc_ptr, char *argv[]);
+static void argument_stack(int argc, char **argv, struct intr_frame *if_);
+
 /* General process initializer for initd and other process. */
 static void
 process_init (void) {
@@ -162,8 +166,11 @@ error:
  * Returns -1 on fail. */
 int
 process_exec (void *f_name) {
-	char *file_name = f_name;
+	char *file_name = f_name; // 실행할 파일 이름(argv[0])
+	// char *file_name_copy[48];
 	bool success;
+
+	// memcpy(file_name_copy, file_name, strlen(file_name) + 1);
 
 	/* We cannot use the intr_frame in the thread structure.
 	 * This is because when current thread rescheduled,
@@ -173,16 +180,28 @@ process_exec (void *f_name) {
 	_if.cs = SEL_UCSEG;
 	_if.eflags = FLAG_IF | FLAG_MBS;
 
+	int argc = 0;
+	char *argv[128];
+
+	/* 커맨드 라인을 파싱한다. */
+	argument_parse(file_name, &argc, argv);
+
 	/* We first kill the current context */
 	process_cleanup ();
 
 	/* And then load the binary */
 	success = load (file_name, &_if);
 
+	argument_stack(argc, argv, &_if);
+	hex_dump(_if.rsp, _if.rsp, USER_STACK - _if.rsp, true);
 	/* If load failed, quit. */
 	palloc_free_page (file_name);
 	if (!success)
 		return -1;
+
+	/* Initialize interrupt frame and load executable. */
+	// argument_stack(argv, argc, &_if.rsp);
+	// hex_dump(_if.rsp, _if.rsp, USER_STACK - _if.rsp, true);
 
 	/* Start switched process. */
 	do_iret (&_if);
@@ -201,6 +220,11 @@ process_exec (void *f_name) {
  * does nothing. */
 int
 process_wait (tid_t child_tid UNUSED) {
+	for (size_t i = 0; i < 1000000000; i++)
+	{
+		/* code */
+	}
+	
 	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
 	 * XXX:       to add infinite loop here before
 	 * XXX:       implementing the process_wait. */
@@ -416,6 +440,9 @@ load (const char *file_name, struct intr_frame *if_) {
 
 	/* TODO: Your code goes here.
 	 * TODO: Implement argument passing (see project2/argument_passing.html). */
+	/* 커맨드 라인을 파싱한다. */
+	// argument_stack(argc, argv, if_->rsp, &if_);
+	// argument_stack(arg_list, token_count, &if_);
 
 	success = true;
 
@@ -637,3 +664,44 @@ setup_stack (struct intr_frame *if_) {
 	return success;
 }
 #endif /* VM */
+
+// 구현 함수
+
+static void argument_parse(char *file_name, int *argc_ptr, char *argv[]){
+	char *token, *save_ptr;
+	
+	for (token = strtok_r(file_name, " ", &save_ptr); token != NULL; token = strtok_r (NULL, " ", &save_ptr))
+        argv[(*argc_ptr)++] = token;
+
+	argv[*argc_ptr] = token;
+}
+
+static void argument_stack(int argc, char **argv, struct intr_frame *if_){
+	char *argv_addr[128];
+	for (int i = argc - 1; i >= 0; i--){ // argument
+		if_->rsp -= strlen(argv[i]) + 1;
+		// if_->rsp = argv[i];
+		memcpy(if_->rsp, argv[i], strlen(argv[i]) + 1);
+		argv_addr[i] = if_->rsp;
+	}
+
+	while (if_->rsp % 8 > 0){ // word-aline padding
+		if_->rsp -= 1;
+		memset(if_->rsp, 0, 1);
+	}
+	
+	if_->rsp -= sizeof(char *);	
+	memset(if_->rsp, 0, sizeof(char *));
+
+	for (int i = argc - 1; i >= 0; i--){
+		if_->rsp -= sizeof(char *);
+		// if_->rsp = argv_addr[i];
+		memcpy(if_->rsp, &argv_addr[i], sizeof(char *));
+	}
+	
+	if_->rsp -= sizeof(char *);
+	memset(if_->rsp, 0, sizeof(char *));
+
+	if_->R.rdi = argc;
+	if_->R.rsi = if_->rsp + 8; 
+}
