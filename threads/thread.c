@@ -191,8 +191,7 @@ thread_print_stats (void) {
    PRIORITY, but no actual priority scheduling is implemented.
    Priority scheduling is the goal of Problem 1-3. */
 tid_t
-thread_create (const char *name, int priority,
-		thread_func *function, void *aux) {
+thread_create (const char *name, int priority, thread_func *function, void *aux) {
 	struct thread *t;
 	tid_t tid;
 
@@ -206,6 +205,20 @@ thread_create (const char *name, int priority,
 	/* Initialize thread. */
 	init_thread (t, name, priority);
 	tid = t->tid = allocate_tid ();
+	
+	/*------------------------- [P2] System Call --------------------------*/
+	t->fdt = palloc_get_multiple(PAL_ZERO, FDT_PAGES);
+	if (t->fdt == NULL) {
+		return TID_ERROR;
+	}
+	t->next_fd = 2; // 0 : stdin, 1 : stdout
+	t->fdt[0] = 1; // STDIN_FILENO
+	t->fdt[1] = 2; // STDOUT_FILENO
+
+/*------------------------- [P2] System Call - Thread --------------------------*/
+	/* 현재 스레드의 자식 리스트에 새로 생성한 스레드 추가 */
+    struct thread *curr = thread_current();
+    list_push_back(&curr->child_list,&t->child_elem);
 
 	/* Call the kernel_thread if it scheduled.
 	 * Note) rdi is 1st argument, and rsi is 2nd argument. */
@@ -217,6 +230,7 @@ thread_create (const char *name, int priority,
 	t->tf.ss = SEL_KDSEG;
 	t->tf.cs = SEL_KCSEG;
 	t->tf.eflags = FLAG_IF;
+
 
 	/* Add to run queue. */
 	thread_unblock (t); // ready_list 에 새로 넣은 스레드 
@@ -300,9 +314,11 @@ thread_tid (void) {
 
 /* Deschedules the current thread and destroys it.  Never
    returns to the caller. */
+/*------------------------- [P2] System Call --------------------------*/
 void
 thread_exit (void) {
 	ASSERT (!intr_context ());
+	struct thread *curr = thread_current (); // 현재 스레드의 포인터
 
 #ifdef USERPROG
 	process_exit ();
@@ -311,6 +327,7 @@ thread_exit (void) {
 	/* Just set our status to dying and schedule another process.
 	   We will be destroyed during the call to schedule_tail(). */
 	intr_disable ();
+	list_remove(&thread_current()->elem); // 전부 사용한 thread는 all_list에서 제거
 	do_schedule (THREAD_DYING);
 	NOT_REACHED ();
 }
@@ -500,6 +517,7 @@ kernel_thread (thread_func *function, void *aux) {
 
 /* Does basic initialization of T as a blocked thread named
    NAME. */
+/*------------------------- [P2] System Call - Thread --------------------------*/
 static void
 init_thread (struct thread *t, const char *name, int priority) {
 	ASSERT (t != NULL);
@@ -515,6 +533,16 @@ init_thread (struct thread *t, const char *name, int priority) {
 	t->wait_on_lock = NULL; // 스레드 생성시에는 기다리는 락이 없으니 NULL값으로 설정한다.
 	list_init (&t->donations); // donations 초기화
 	t->magic = THREAD_MAGIC;
+
+/*------------------------- [P2] System Call --------------------------*/
+	t->exit_status = 0;
+	t->running = NULL;
+
+	/* 자식 리스트 및 세마포어 초기화 */
+    list_init(&t->child_list);
+    sema_init(&t->wait_sema,0);
+    sema_init(&t->fork_sema,0);
+    sema_init(&t->free_sema,0);
 }
 // 준비 리스트에서 맨 앞의 스레드를 뽑아와, 컨텍스트 스위치 수행
 /* Chooses and returns the next thread to be scheduled.  Should
