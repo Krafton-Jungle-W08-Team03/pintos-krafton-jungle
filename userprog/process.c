@@ -170,7 +170,7 @@ __do_fork (void *aux) {
 	/* 1. Read the cpu context to local stack. */
 	memcpy (&if_, parent_if, sizeof (struct intr_frame));
 
-	// if_.R.rax = 0 ; // ! if_의 리턴값을 0으로 설정?
+	if_.R.rax = 0 ; // ! if_의 리턴값을 0으로 설정?
 
 	/* 2. Duplicate PT */
 	current->pml4 = pml4_create();
